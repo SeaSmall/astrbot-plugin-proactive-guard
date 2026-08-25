@@ -36,7 +36,7 @@ try:
 except ImportError:  # 旧版本兼容
     from astrbot.api.message_components import MessageChain
 
-DEFAULT_PERSONA = (
+FALLBACK_PERSONA = (
     "你是一个温柔、自然、不油腻的朋友型 AI 陪伴者。说话像真实的朋友，"
     "简洁自然，会关心人但不过度肉麻，不滥用表情，不叫用户「亲」「宝」。"
 )
@@ -328,7 +328,7 @@ class ProactiveGuardPlugin(Star):
         )
         times = self._random_times(count)
         time_list = "、".join(times)
-        persona = str(self.config.get("persona") or DEFAULT_PERSONA).strip()
+        persona = await self._resolve_persona()
         prompt = (self.config.get("message_prompt") or DEFAULT_PROMPT).replace(
             "{date}", today
         ).replace("{persona}", persona).replace(
@@ -341,6 +341,60 @@ class ProactiveGuardPlugin(Star):
             return
         await self.put_kv_data("daily_schedule", {"date": today, "items": items})
         logger.info(f"[proactive_guard] 今日计划已生成：{len(items)} 条消息 @ {time_list}（后台静默）")
+
+    async def _resolve_persona(self) -> str:
+        """获取 AstrBot 当前人格设定（不单独配置）。"""
+        pm = getattr(self.context, "persona_manager", None)
+        if pm is not None:
+            try:
+                # v3 人格（AstrBot 4.x 默认）：按配置的 default_personality 解析
+                get_default = getattr(pm, "get_default_persona_v3", None)
+                if callable(get_default):
+                    p = await get_default()
+                    text = self._persona_text(p)
+                    if text:
+                        return text
+                # 兜底：初始化时选中的 v3 人格 / v2 人格
+                for attr in ("selected_default_persona_v3", "selected_default_persona"):
+                    p = getattr(pm, attr, None)
+                    if p is not None:
+                        text = self._persona_text(p)
+                        if text:
+                            return text
+            except Exception as e:
+                logger.debug(f"[proactive_guard] 读取 AstrBot 人格失败: {e}")
+        return FALLBACK_PERSONA
+
+    @staticmethod
+    def _persona_text(p) -> str:
+        """从 Personality / Persona 对象中提取设定文本。"""
+        if p is None:
+            return ""
+        prompt = ""
+        name = ""
+        try:
+            prompt = getattr(p, "prompt", None) or (
+                p.get("prompt") if isinstance(p, dict) else None
+            )
+            name = getattr(p, "name", None) or (
+                p.get("name") if isinstance(p, dict) else None
+            )
+        except Exception:
+            pass
+        if not prompt:
+            try:
+                prompt = getattr(p, "persona", None) or (
+                    p.get("persona") if isinstance(p, dict) else None
+                )
+            except Exception:
+                pass
+        prompt = str(prompt or "").strip()
+        if not prompt:
+            return ""
+        name = str(name or "").strip()
+        if name:
+            return f"人格名称：{name}\n人格设定：{prompt}"
+        return f"人格设定：{prompt}"
 
     def _random_times(self, count: int) -> list[str]:
         start = self._hhmm_to_min(str(self.config.get("window_start") or "07:00"))
