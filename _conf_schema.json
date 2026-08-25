@@ -34,15 +34,10 @@
     "default": "0 6 * * *",
     "description": "每日生成计划的时间（cron，默认每天 06:00，后台静默生成）"
   },
-  "persona": {
-    "type": "text",
-    "default": "你是一个温柔、自然、不油腻的朋友型 AI 陪伴者。说话像真实的朋友，简洁自然，会关心人但不过度肉麻，不滥用表情，不叫用户「亲」「宝」。",
-    "description": "人格设定：AI 写消息时遵循的人设"
-  },
   "message_prompt": {
     "type": "text",
     "default": "你是{persona}\n今天是{date}。请在下面给出的 {count} 个时间点，分别给用户写一条简短消息（20~60字），要求：\n1. 每条消息要贴合对应时间点的场景（早晨问候、上午加油、中午提醒休息吃饭、下午闲聊、傍晚关心、晚上问候、睡前道晚安等）\n2. 每条内容必须不同，风格自然口语化，像真人朋友随手发的一条\n3. 只输出一个 JSON 数组，格式：[{\"time\": \"07:35\", \"text\": \"消息内容\"}, ...]\n4. 不要输出 JSON 以外的任何文字\n时间点：{time_list}",
-    "description": "写消息的提示词模板（{persona} {date} {time_list} {count} 会被自动替换）"
+    "description": "写消息的提示词模板（{persona} 自动替换为 AstrBot 当前人格设定，{date} {time_list} {count} 自动替换）"
   },
   "msg_count_min": {
     "type": "int",
