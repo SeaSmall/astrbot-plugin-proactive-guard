@@ -1,0 +1,82 @@
+{
+  "enabled": {
+    "type": "bool",
+    "default": true,
+    "description": "总开关：关闭后门禁拦截与每日消息全部停用"
+  },
+  "block_proactive": {
+    "type": "bool",
+    "default": true,
+    "description": "门禁开关：拦截本插件之外的 AI 主动发言（用户未发消息时的所有 AI 生成与发送）"
+  },
+  "strict_mode": {
+    "type": "bool",
+    "default": false,
+    "description": "严格模式：开启后连「用户最近发过消息的会话」也不放行，只允许本插件发送（推荐给只需要定时消息的用户）"
+  },
+  "active_window_minutes": {
+    "type": "int",
+    "default": 30,
+    "description": "活跃窗口（分钟）：用户在此窗口内发过消息的会话，允许 AI 正常回复/发送（视为用户主动发起对话）"
+  },
+  "allow_senders": {
+    "type": "text",
+    "default": "",
+    "description": "主动发送白名单：允许主动发消息的插件模块名关键词，每行一个（如 daily_digest）。留空则只允许本插件"
+  },
+  "pause_active_agent_jobs": {
+    "type": "bool",
+    "default": true,
+    "description": "插件启用时自动暂停 AstrBot 内置「主动型 Agent」定时任务（可逆，不会删除任务）"
+  },
+  "gen_time": {
+    "type": "string",
+    "default": "0 6 * * *",
+    "description": "每日生成计划的时间（cron，默认每天 06:00，后台静默生成）"
+  },
+  "persona": {
+    "type": "text",
+    "default": "你是一个温柔、自然、不油腻的朋友型 AI 陪伴者。说话像真实的朋友，简洁自然，会关心人但不过度肉麻，不滥用表情，不叫用户「亲」「宝」。",
+    "description": "人格设定：AI 写消息时遵循的人设"
+  },
+  "message_prompt": {
+    "type": "text",
+    "default": "你是{persona}\n今天是{date}。请在下面给出的 {count} 个时间点，分别给用户写一条简短消息（20~60字），要求：\n1. 每条消息要贴合对应时间点的场景（早晨问候、上午加油、中午提醒休息吃饭、下午闲聊、傍晚关心、晚上问候、睡前道晚安等）\n2. 每条内容必须不同，风格自然口语化，像真人朋友随手发的一条\n3. 只输出一个 JSON 数组，格式：[{\"time\": \"07:35\", \"text\": \"消息内容\"}, ...]\n4. 不要输出 JSON 以外的任何文字\n时间点：{time_list}",
+    "description": "写消息的提示词模板（{persona} {date} {time_list} {count} 会被自动替换）"
+  },
+  "msg_count_min": {
+    "type": "int",
+    "default": 5,
+    "description": "每日最少消息条数"
+  },
+  "msg_count_max": {
+    "type": "int",
+    "default": 10,
+    "description": "每日最多消息条数"
+  },
+  "window_start": {
+    "type": "string",
+    "default": "07:00",
+    "description": "消息时间窗口起点（HH:MM）"
+  },
+  "window_end": {
+    "type": "string",
+    "default": "23:00",
+    "description": "消息时间窗口终点（HH:MM）"
+  },
+  "missed_grace_minutes": {
+    "type": "int",
+    "default": 30,
+    "description": "过期补偿窗口（分钟）：到点未发出（如设备休眠）会在此窗口内补发；超过则丢弃该条"
+  },
+  "target_sessions": {
+    "type": "text",
+    "default": "",
+    "description": "发送目标会话（unified_msg_origin，每行一个，如 aiocqhttp:Friend:123456）。留空则自动选择（见 only_private）"
+  },
+  "only_private": {
+    "type": "bool",
+    "default": true,
+    "description": "未指定 target_sessions 时：仅发送给私聊会话（好友/私聊），不发送到群聊"
+  }
+}
