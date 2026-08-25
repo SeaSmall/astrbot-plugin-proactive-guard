@@ -26,7 +26,7 @@
 
 1. 每天 `gen_time`（默认 06:00，cron 可配）触发；
 2. 在 `window_start ~ window_end`（默认 07:00~23:00）内随机抽取 5~10 个**互不相同**的时间点（`msg_count_min/max` 可配）；
-3. 调用 AstrBot 当前 LLM，按 `persona`（人格）和每个时间点的场景写一条消息，输出 JSON；
+3. 调用 AstrBot 当前 LLM，按**当前人格设定**（自动读取 AstrBot 的「人格」设置，无需单独配置）和每个时间点的场景写一条消息，输出 JSON；
 4. 存入插件 KV 存储（`daily_schedule`，含日期，重启不丢）；
 5. 每**分钟**检查一次：到点 → 发送 → **删除该时间点**；错过未发（设备休眠）→ 30 分钟补偿窗口内补发，超窗丢弃；生成失败 → 每 20 分钟自动重试（06:00~11:00 窗口内）。
 
@@ -34,7 +34,7 @@
 
 1. AstrBot WebUI →「插件」→「安装插件」→「通过 Git 地址安装」
 2. 输入：`https://github.com/SeaSmall/astrbot-plugin-proactive-guard`
-3. 启用插件，在配置面板按需修改（人格、时间窗口、目标会话等）
+3. 启用插件，在配置面板按需修改（时间窗口、目标会话等）
 
 > 要求 **AstrBot 4.x**。
 
@@ -49,8 +49,7 @@
 | `allow_senders` | text | 空 | 主动发送白名单：插件模块名关键词，每行一个（如 `daily_digest`） |
 | `pause_active_agent_jobs` | bool | `true` | 启用时自动暂停 AstrBot 内置主动型 Agent 任务（可恢复） |
 | `gen_time` | string | `0 6 * * *` | 每日生成计划时间（cron，默认每天 06:00） |
-| `persona` | text | 见默认值 | 人格设定：AI 写消息时遵循的人设 |
-| `message_prompt` | text | 见默认值 | 写消息提示词模板（`{persona} {date} {time_list} {count}` 自动替换） |
+| `message_prompt` | text | 见默认值 | 写消息提示词模板（`{persona}` 自动替换为 **AstrBot 当前人格设定**，`{date} {time_list} {count}` 自动替换） |
 | `msg_count_min` / `msg_count_max` | int | `5` / `10` | 每日消息条数范围 |
 | `window_start` / `window_end` | string | `07:00` / `23:00` | 消息时间窗口 |
 | `missed_grace_minutes` | int | `30` | 错过补发窗口（分钟），超窗丢弃 |
@@ -85,6 +84,9 @@
 
 **Q：装上门禁后，之前的"突然冒话"还会出现吗？**
 不会。主动型 Agent 任务会被自动暂停，且即使任何插件/AI 尝试主动发送，也会被门禁拦截（日志可见）。
+
+**Q：写消息用的人格是哪来的？**
+无需单独配置——插件自动读取 **AstrBot 当前默认人格**（`服务提供商 → 人格` 里设置的默认人格）的设定文本；如果 AstrBot 未设置任何人格，则使用内置的温和默认人设兜底。
 
 **Q：会不会误伤正常聊天？**
 不会。用户发消息→机器人回复走的是正常链路，不经过门禁；只有"用户没发消息时的主动发送"才被拦截。同一会话 30 分钟内有用户消息时，AI 的回复/发送也正常放行。
