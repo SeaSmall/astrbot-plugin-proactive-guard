@@ -5,11 +5,16 @@ proactive_guard —— AstrBot 主动消息门禁 + 每日定时人格消息插�
 1. 门禁：拦截「本插件之外」的 AI 主动发言。
    用户未发送消息时，任何 AI 对话的生成与发送都会被阻止
    （白名单插件、用户最近活跃会话的回复除外）。
-2. 每日人格消息：每天 gen_time（默认 06:00）在后台生成 5-10 条消息，
+2. 每日人格消息：每天在后台预生成「明天」的 5-10 条消息，
    随机分配到 window_start ~ window_end（默认 07:00-23:00）的时间点，
    由 AI 根据人格设定与时间点撰写各不相同的内容，存入内部存储；
-   到点自动发送该条并删除；第二天再生成新计划，日复一日。
-   全程后台静默运行，不向用户发送任何报备/确认消息。
+   到点自动发送该条并删除；跨天自动把预生成的明日计划提升为今日计划，
+   日复一日。全程后台静默运行，不向用户发送任何报备/确认消息。
+
+KV 存储（v1.0.1 双槽位）：
+- daily_plan       ：date = 今天，到点派发用
+- daily_plan_next  ：date = 明天，提前预生成
+清理明天的计划后重载 -> 立即重新生成明天，绝不生成后天。
 
 要求：AstrBot 4.x（插件 API 按 4.x 编写）
 """
@@ -63,6 +68,7 @@ class ProactiveGuardPlugin(Star):
         self._last_user_activity: dict[str, float] = {}
         self._gen_lock = asyncio.Lock()
         self._last_gen_attempt = 0.0
+        self._migrated = False
 
     # ================================================================== #
     # 生命周期
@@ -274,14 +280,14 @@ class ProactiveGuardPlugin(Star):
             logger.error(f"[proactive_guard] 定时任务注册失败: {e}")
 
     async def _on_gen_time(self) -> None:
-        """到生成时间：确保今日计划存在（后台静默）。"""
+        """到生成时间：确保今日计划存在、明日计划已预生成（后台静默）。"""
         try:
             await self._ensure_schedule(force=False)
         except Exception as e:
-            logger.error(f"[proactive_guard] 生成今日计划失败: {e}", exc_info=True)
+            logger.error(f"[proactive_guard] 生成计划失败: {e}", exc_info=True)
 
     async def _on_minute(self) -> None:
-        """每分钟：发送到点的消息，并兜底补种今日计划。"""
+        """每分钟：发送到点的消息，并兜底补种计划。"""
         try:
             await self._dispatch_due()
             await self._ensure_schedule(force=False)
@@ -290,39 +296,79 @@ class ProactiveGuardPlugin(Star):
 
     # ================================================================== #
     # 每日计划：生成 / 存储 / 发送 / 删除
+    #
+    # KV 双槽位设计（v1.0.1）：
+    #   - daily_plan       ：date = 今天，到点派发用
+    #   - daily_plan_next  ：date = 明天，预生成（提前一天生成）
+    # 这样「清理明天的计划后重载」只会重新生成明天，绝不生成后天。
     # ================================================================== #
+    async def _migrate_old_schedule(self) -> None:
+        """v1.0.0 -> v1.0.1 迁移：把旧键 daily_schedule 拆进双槽位后删除旧键。"""
+        if self._migrated:
+            return
+        self._migrated = True
+        try:
+            old = await self.get_kv_data("daily_schedule", None)
+            if not old:
+                return
+            today = datetime.now().strftime("%Y-%m-%d")
+            tomorrow = (datetime.now() + timedelta(days=1)).strftime("%Y-%m-%d")
+            d = old.get("date")
+            if d == today and old.get("items"):
+                await self.put_kv_data("daily_plan", old)
+            elif d == tomorrow and old.get("items"):
+                await self.put_kv_data("daily_plan_next", old)
+            await self.put_kv_data("daily_schedule", None)  # 清掉旧键
+            logger.info("[proactive_guard] 已迁移旧版 daily_schedule 到新双槽位")
+        except Exception as e:
+            logger.warning(f"[proactive_guard] 旧计划迁移失败: {e}")
+
     async def _ensure_schedule(self, force: bool) -> None:
+        """确保：daily_plan.date == 今天，daily_plan_next.date == 明天。
+
+        - 若 daily_plan 过期：把 daily_plan_next 提升为 daily_plan（若其 date 已是
+          今天），否则丢弃过期计划；
+        - 若 daily_plan_next 不是明天：生成明天的计划。补种任意时刻可进行
+          （无小时窗口限制），非 force 时受 20 分钟节流；force 忽略节流
+          （清理明天的计划后重载 -> 立即重新生成明天，绝不生成后天）。
+        """
         if not self._cfg_bool("enabled", True):
             return
+        await self._migrate_old_schedule()
         today = datetime.now().strftime("%Y-%m-%d")
-        sched = await self._load_schedule()
-        if sched and sched.get("date") == today and sched.get("items"):
-            return
-        if not force:
-            # 生成失败后的补种：仅在生成时间后的 5 小时内尝试，且每次间隔 >= 20 分钟
-            gen_cron = str(self.config.get("gen_time") or "0 6 * * *").strip()
-            gen_hour = 6
-            try:
-                parts = gen_cron.split()
-                if len(parts) >= 2 and parts[1].isdigit():
-                    gen_hour = int(parts[1])
-            except Exception:
-                pass
-            now = datetime.now()
-            if not (gen_hour <= now.hour < gen_hour + 5):
-                return
-            if time.time() - self._last_gen_attempt < 20 * 60:
-                return
-        async with self._gen_lock:
-            sched = await self._load_schedule()
-            if sched and sched.get("date") == today and sched.get("items"):
-                return
-            self._last_gen_attempt = time.time()
-            await self._generate_and_store()
+        tomorrow = (datetime.now() + timedelta(days=1)).strftime("%Y-%m-%d")
 
-    async def _generate_and_store(self) -> None:
-        """后台生成今日计划并写入 KV 存储（静默，不通知用户）。"""
+        # a) 今天的槽位过期：提升 daily_plan_next 或丢弃
+        plan = await self._load_schedule("daily_plan")
+        if plan.get("date") != today or not plan.get("items"):
+            next_plan = await self._load_schedule("daily_plan_next")
+            if next_plan.get("date") == today and next_plan.get("items"):
+                await self.put_kv_data("daily_plan", next_plan)
+                await self.put_kv_data("daily_plan_next", {})
+                logger.info("[proactive_guard] 已将预生成的明日计划提升为今日计划")
+            else:
+                await self.put_kv_data("daily_plan", {})  # 过期计划静默丢弃
+
+        # b) 明天的槽位缺失：生成明天的计划
+        next_plan = await self._load_schedule("daily_plan_next")
+        if next_plan.get("date") != tomorrow or not next_plan.get("items"):
+            if not force and time.time() - self._last_gen_attempt < 20 * 60:
+                return  # 20 分钟节流
+            async with self._gen_lock:
+                next_plan = await self._load_schedule("daily_plan_next")
+                if next_plan.get("date") == tomorrow and next_plan.get("items"):
+                    return
+                self._last_gen_attempt = time.time()
+                await self._generate_and_store(target_date=tomorrow)
+
+    async def _generate_and_store(self, target_date: str) -> None:
+        """后台为指定日期生成计划并写入 KV 存储（静默，不通知用户）。
+
+        目标日期为明天 -> 存 daily_plan_next（预生成）；
+        目标日期为今天 -> 存 daily_plan（/重建今日计划 在窗口未结束时补今天的场景）。
+        """
         today = datetime.now().strftime("%Y-%m-%d")
+        slot = "daily_plan" if target_date == today else "daily_plan_next"
         count = random.randint(
             self._cfg_int("msg_count_min", 5), self._cfg_int("msg_count_max", 10)
         )
@@ -330,17 +376,22 @@ class ProactiveGuardPlugin(Star):
         time_list = "、".join(times)
         persona = await self._resolve_persona()
         prompt = (self.config.get("message_prompt") or DEFAULT_PROMPT).replace(
-            "{date}", today
+            "{date}", target_date
         ).replace("{persona}", persona).replace(
             "{time_list}", time_list
         ).replace("{count}", str(count))
         text = await self._llm_chat(prompt)
         items = self._parse_items(text, times)
         if not items:
-            logger.error("[proactive_guard] 今日计划生成失败：无法解析 LLM 输出，稍后重试")
+            logger.error(
+                f"[proactive_guard] 计划生成失败（{target_date}）：无法解析 LLM 输出，稍后重试"
+            )
             return
-        await self.put_kv_data("daily_schedule", {"date": today, "items": items})
-        logger.info(f"[proactive_guard] 今日计划已生成：{len(items)} 条消息 @ {time_list}（后台静默）")
+        await self.put_kv_data(slot, {"date": target_date, "items": items})
+        logger.info(
+            f"[proactive_guard] 计划已生成（{target_date}）：{len(items)} 条消息 "
+            f"@ {time_list}（后台静默）"
+        )
 
     async def _resolve_persona(self) -> str:
         """获取 AstrBot 当前人格设定（不单独配置）。"""
@@ -464,19 +515,20 @@ class ProactiveGuardPlugin(Star):
         return dedup
 
     async def _dispatch_due(self) -> None:
-        """到点发送并删除该时间点；过期在补偿窗口内补发，超窗丢弃。"""
-        sched = await self._load_schedule()
-        if not sched or not sched.get("items"):
+        """只从 daily_plan（date==今天）派发：到点发送并删除该时间点；
+        错过在补偿窗口内补发，超窗丢弃；date<今天的旧计划静默丢弃（由 _ensure_schedule 清理）。"""
+        plan = await self._load_schedule("daily_plan")
+        if not plan or not plan.get("items"):
             return
         today = datetime.now().strftime("%Y-%m-%d")
-        if sched.get("date") != today:
-            return
+        if plan.get("date") != today:
+            return  # 非今天的旧计划，静默丢弃
         now = datetime.now()
         now_min = now.hour * 60 + now.minute
         grace = self._cfg_int("missed_grace_minutes", 30)
         due: list[dict] = []
         removed: list[str] = []
-        for it in sched["items"]:
+        for it in plan["items"]:
             it_min = self._hhmm_to_min(str(it.get("time", "")))
             if it_min == now_min:
                 due.append(it)
@@ -493,10 +545,10 @@ class ProactiveGuardPlugin(Star):
             removed.append(str(it.get("time", "")))
             logger.info(f"[proactive_guard] 已发送 {it.get('time')} 的消息并移除该时间点")
         if removed:
-            sched["items"] = [
-                it for it in sched["items"] if str(it.get("time", "")) not in removed
+            plan["items"] = [
+                it for it in plan["items"] if str(it.get("time", "")) not in removed
             ]
-            await self.put_kv_data("daily_schedule", sched)
+            await self.put_kv_data("daily_plan", plan)
 
     # ------------------------------------------------------------------ #
     # 发送（绕过门禁，静默）
@@ -554,9 +606,9 @@ class ProactiveGuardPlugin(Star):
     # ------------------------------------------------------------------ #
     # KV 存储
     # ------------------------------------------------------------------ #
-    async def _load_schedule(self) -> dict:
+    async def _load_schedule(self, key: str) -> dict:
         try:
-            return (await self.get_kv_data("daily_schedule", None)) or {}
+            return (await self.get_kv_data(key, None)) or {}
         except Exception:
             return {}
 
@@ -565,22 +617,51 @@ class ProactiveGuardPlugin(Star):
     # ================================================================== #
     @filter.command("今日计划")
     async def today_plan_command(self, event: AstrMessageEvent):
-        """查看今日待发送的人格消息计划"""
-        sched = await self._load_schedule()
+        """查看今日待发送的人格消息计划 + 明日预生成摘要"""
         today = datetime.now().strftime("%Y-%m-%d")
-        if not sched or sched.get("date") != today or not sched.get("items"):
-            yield event.plain_result("📭 今日暂无待发送的消息计划。")
-            return
-        lines = [f"📋 今日计划（{today}）"]
-        for it in sorted(sched["items"], key=lambda x: x.get("time", "")):
-            lines.append(f"- {it.get('time')} {str(it.get('text', ''))[:40]}")
+        tomorrow = (datetime.now() + timedelta(days=1)).strftime("%Y-%m-%d")
+        plan = await self._load_schedule("daily_plan")
+        next_plan = await self._load_schedule("daily_plan_next")
+        lines: list[str] = []
+        if plan.get("date") == today and plan.get("items"):
+            lines.append(f"📋 今日计划（{today}）")
+            for it in sorted(plan["items"], key=lambda x: x.get("time", "")):
+                lines.append(f"- {it.get('time')} {str(it.get('text', ''))[:40]}")
+        else:
+            lines.append(f"📭 今日（{today}）暂无待发送的消息计划。")
+        lines.append("")
+        if next_plan.get("date") == tomorrow and next_plan.get("items"):
+            lines.append(f"🗓️ 明日计划已预生成（{tomorrow}，共 {len(next_plan['items'])} 条）")
+            for it in sorted(next_plan["items"], key=lambda x: x.get("time", ""))[:5]:
+                lines.append(f"- {it.get('time')} {str(it.get('text', ''))[:40]}")
+            if len(next_plan["items"]) > 5:
+                lines.append(f"  … 共 {len(next_plan['items'])} 条")
+        else:
+            lines.append(f"🗓️ 明日（{tomorrow}）计划尚未生成。")
         yield event.plain_result("\n".join(lines))
 
     @filter.command("重建今日计划")
     async def rebuild_plan_command(self, event: AstrMessageEvent):
-        """立即在后台重新生成今日计划"""
-        yield event.plain_result("⏳ 正在后台重建今日计划…")
-        asyncio.create_task(self._ensure_schedule(force=True))
+        """立即在后台重新生成明天的计划；若今天的窗口未结束且今天计划缺失，也补一份今天的"""
+        yield event.plain_result("⏳ 正在后台重建计划…")
+        asyncio.create_task(self._rebuild_plans())
+
+    async def _rebuild_plans(self) -> None:
+        """强制重建：明天的计划无条件重新生成；今天的窗口未结束且今天计划缺失时补今天的。"""
+        if not self._cfg_bool("enabled", True):
+            return
+        today = datetime.now().strftime("%Y-%m-%d")
+        tomorrow = (datetime.now() + timedelta(days=1)).strftime("%Y-%m-%d")
+        plan = await self._load_schedule("daily_plan")
+        window_end = self._hhmm_to_min(str(self.config.get("window_end") or "23:00"))
+        now_min = datetime.now().hour * 60 + datetime.now().minute
+        # 今天的窗口未结束且今天计划缺失 -> 补一份今天的
+        if (plan.get("date") != today or not plan.get("items")) and now_min < window_end:
+            async with self._gen_lock:
+                await self._generate_and_store(target_date=today)
+        # 无条件重新生成明天的计划（force 忽略节流）
+        async with self._gen_lock:
+            await self._generate_and_store(target_date=tomorrow)
 
     # ================================================================== #
     # LLM 调用（新 API 优先，旧 API 回退）
