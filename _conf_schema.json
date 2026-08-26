@@ -32,7 +32,7 @@
   "gen_time": {
     "type": "string",
     "default": "0 6 * * *",
-    "description": "每日生成计划的时间（cron，默认每天 06:00，后台静默生成）"
+    "description": "每日计划生成时间（cron，默认每天 06:00）：确保「明天」的计划已预生成；计划缺失时任意时刻都会自动补种（20 分钟节流）"
   },
   "message_prompt": {
     "type": "text",
