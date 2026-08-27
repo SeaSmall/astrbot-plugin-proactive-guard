@@ -69,6 +69,11 @@
     "default": 30,
     "description": "过期补偿窗口（分钟）：到点未发出（如设备休眠）会在此窗口内补发；超过则丢弃该条"
   },
+  "record_to_history": {
+    "type": "bool",
+    "default": true,
+    "description": "把主动发送的人格消息写入该会话的 LLM 对话历史（assistant 角色），避免模型后续回复时不知道机器人主动说过什么（记忆断层）。关闭则不写入"
+  },
   "target_sessions": {
     "type": "text",
     "default": "",

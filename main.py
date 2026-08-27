@@ -586,17 +586,50 @@ class ProactiveGuardPlugin(Star):
             return
         chunks = self._split_text(text)
         for umo in targets:
+            ok = False
             for chunk in chunks:
                 try:
                     chain = MessageChain().message(chunk)
                     self._bypass_cnt += 1
                     try:
-                        await self.context.send_message(umo, chain)
+                        ok = bool(await self.context.send_message(umo, chain)) or ok
                     finally:
                         self._bypass_cnt -= 1
                     await asyncio.sleep(0.3)
                 except Exception as e:
                     logger.error(f"[proactive_guard] 发送到 {umo} 失败: {e}")
+            if ok and self._cfg_bool("record_to_history", True):
+                await self._record_to_history(umo, text)
+
+    async def _record_to_history(self, umo: str, text: str) -> None:
+        """把主动消息写入该会话的 LLM 对话历史，避免「被动输出与主动输出」记忆断层。
+
+        与 AstrBot 官方 persist_agent_history 同一机制：通过 conversation_manager
+        在会话当前对话的 history 末尾追加一条 assistant 消息，模型后续回复时即可看到。
+        """
+        if not self._cfg_bool("record_to_history", True):
+            return
+        try:
+            cm = getattr(self.context, "conversation_manager", None)
+            if cm is None or not hasattr(cm, "update_conversation"):
+                return
+            cid = await cm.get_curr_conversation_id(umo)
+            if not cid:
+                return  # 会话还没有对话，跳过
+            conv = await cm.get_conversation(umo, cid)
+            history: list[dict] = []
+            if conv is not None and getattr(conv, "history", None):
+                try:
+                    history = json.loads(conv.history) or []
+                except Exception:
+                    history = []
+            if not isinstance(history, list):
+                history = []
+            history.append({"role": "assistant", "content": text})
+            await cm.update_conversation(umo, cid, history=history)
+            logger.debug(f"[proactive_guard] 已把主动消息写入会话历史（{umo}）")
+        except Exception as e:
+            logger.warning(f"[proactive_guard] 写入会话历史失败（{umo}）: {e}")
 
     async def _collect_target_sessions(self) -> list[str]:
         sessions: set[str] = set()

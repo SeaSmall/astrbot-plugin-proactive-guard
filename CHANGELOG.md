@@ -33,3 +33,14 @@
 - **修复**：新增 `timezone` 配置项（默认 `Asia/Shanghai`），cron_manager 与
   APScheduler 兜底两条路径都显式传时区（`CronTrigger.from_crontab(expr, timezone=...)`）；
   旧版 cron_manager 不支持 timezone 参数时自动回退。
+
+## v1.0.3（2026-08-27）
+
+### ✨ 新增：主动消息写入会话历史（修复「被动输出与主动输出」记忆断层）
+
+- **问题**：`_send_silent` 只通过 `context.send_message` 发送主动人格消息，没有把消息
+  写入该会话的 LLM 对话历史，模型后续回复时不知道机器人主动说过什么，上下文断裂。
+- **修复**：发送成功后通过 `context.conversation_manager`（与 AstrBot 官方
+  `persist_agent_history` 同一机制）在会话当前对话的 history 末尾追加一条
+  assistant 消息；会话尚无对话 / 无 conversation_manager（旧版）时静默跳过。
+- 新配置项 `record_to_history`（默认 `true`）：关闭则不写入会话历史。
