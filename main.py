@@ -230,29 +230,54 @@ class ProactiveGuardPlugin(Star):
     # ================================================================== #
     async def _setup_scheduler(self) -> None:
         gen_cron = str(self.config.get("gen_time") or "0 6 * * *").strip()
+        tz = str(self.config.get("timezone") or "Asia/Shanghai").strip()
         cm = getattr(self.context, "cron_manager", None)
         if cm is not None and hasattr(cm, "add_basic_job"):
             try:
-                j1 = await cm.add_basic_job(
-                    name="proactive_guard_gen",
-                    cron_expression=gen_cron,
-                    handler=self._on_gen_time,
-                    description="每日生成人格消息计划（后台）",
-                    enabled=True,
-                    persistent=False,
-                )
+                try:
+                    j1 = await cm.add_basic_job(
+                        name="proactive_guard_gen",
+                        cron_expression=gen_cron,
+                        handler=self._on_gen_time,
+                        description="每日生成人格消息计划（后台）",
+                        enabled=True,
+                        persistent=False,
+                        timezone=tz,
+                    )
+                except TypeError:
+                    # 旧版 cron_manager 不支持 timezone 参数
+                    j1 = await cm.add_basic_job(
+                        name="proactive_guard_gen",
+                        cron_expression=gen_cron,
+                        handler=self._on_gen_time,
+                        description="每日生成人格消息计划（后台）",
+                        enabled=True,
+                        persistent=False,
+                    )
                 self._cron_job_ids.append(getattr(j1, "job_id", None))
-                j2 = await cm.add_basic_job(
-                    name="proactive_guard_minute",
-                    cron_expression="* * * * *",
-                    handler=self._on_minute,
-                    description="每分钟检查待发送的人格消息",
-                    enabled=True,
-                    persistent=False,
-                )
+                try:
+                    j2 = await cm.add_basic_job(
+                        name="proactive_guard_minute",
+                        cron_expression="* * * * *",
+                        handler=self._on_minute,
+                        description="每分钟检查待发送的人格消息",
+                        enabled=True,
+                        persistent=False,
+                        timezone=tz,
+                    )
+                except TypeError:
+                    j2 = await cm.add_basic_job(
+                        name="proactive_guard_minute",
+                        cron_expression="* * * * *",
+                        handler=self._on_minute,
+                        description="每分钟检查待发送的人格消息",
+                        enabled=True,
+                        persistent=False,
+                    )
                 self._cron_job_ids.append(getattr(j2, "job_id", None))
                 logger.info(
-                    f"[proactive_guard] 定时任务已注册（cron_manager）: 生成 {gen_cron} / 分钟检查 * * * * *"
+                    f"[proactive_guard] 定时任务已注册（cron_manager）: 生成 {gen_cron} "
+                    f"/ 分钟检查 * * * * *（时区 {tz}）"
                 )
                 return
             except Exception as e:
@@ -261,21 +286,24 @@ class ProactiveGuardPlugin(Star):
             from apscheduler.schedulers.asyncio import AsyncIOScheduler
             from apscheduler.triggers.cron import CronTrigger
 
-            self._fallback_sched = AsyncIOScheduler()
+            self._fallback_sched = AsyncIOScheduler(timezone=tz)
             self._fallback_sched.add_job(
                 self._on_gen_time,
-                CronTrigger.from_crontab(gen_cron),
+                CronTrigger.from_crontab(gen_cron, timezone=tz),
                 id="pg_gen",
                 misfire_grace_time=300,
             )
             self._fallback_sched.add_job(
                 self._on_minute,
-                CronTrigger.from_crontab("* * * * *"),
+                CronTrigger.from_crontab("* * * * *", timezone=tz),
                 id="pg_min",
                 misfire_grace_time=30,
             )
             self._fallback_sched.start()
-            logger.info(f"[proactive_guard] 定时任务已注册（APScheduler）: 生成 {gen_cron} / 分钟检查")
+            logger.info(
+                f"[proactive_guard] 定时任务已注册（APScheduler）: 生成 {gen_cron} "
+                f"/ 分钟检查（时区 {tz}）"
+            )
         except Exception as e:
             logger.error(f"[proactive_guard] 定时任务注册失败: {e}")
 

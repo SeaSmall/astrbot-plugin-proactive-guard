@@ -23,3 +23,13 @@
 
 - 新增假时钟冒烟测试（`test_guard_core.py` 扩展）：覆盖「清空明天 → 重载 → 重新生成明天」
   核心回归、00:00 跨天提升、派发/删除/补发/丢弃、20 分钟节流、旧键迁移。
+
+## v1.0.2（2026-08-27）
+
+### 🐛 修复：定时任务未显式指定时区（默认 UTC 导致生成时间错位）
+
+- **根因**：`_setup_scheduler` 注册 cron 时未指定 timezone，在系统时区非 Asia/Shanghai
+  的部署（如 UTC）上，`0 6 * * *` 会按 UTC 6 点触发，与预期北京时间 06:00 错位。
+- **修复**：新增 `timezone` 配置项（默认 `Asia/Shanghai`），cron_manager 与
+  APScheduler 兜底两条路径都显式传时区（`CronTrigger.from_crontab(expr, timezone=...)`）；
+  旧版 cron_manager 不支持 timezone 参数时自动回退。

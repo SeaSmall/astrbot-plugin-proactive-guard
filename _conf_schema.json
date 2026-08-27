@@ -34,6 +34,11 @@
     "default": "0 6 * * *",
     "description": "每日计划生成时间（cron，默认每天 06:00）：确保「明天」的计划已预生成；计划缺失时任意时刻都会自动补种（20 分钟节流）"
   },
+  "timezone": {
+    "type": "string",
+    "default": "Asia/Shanghai",
+    "description": "定时任务时区（IANA 时区名，如 Asia/Shanghai / UTC）。cron 表达式按此时区计算，避免默认 UTC 导致生成时间错位"
+  },
   "message_prompt": {
     "type": "text",
     "default": "你是{persona}\n今天是{date}。请在下面给出的 {count} 个时间点，分别给用户写一条简短消息（20~60字），要求：\n1. 每条消息要贴合对应时间点的场景（早晨问候、上午加油、中午提醒休息吃饭、下午闲聊、傍晚关心、晚上问候、睡前道晚安等）\n2. 每条内容必须不同，风格自然口语化，像真人朋友随手发的一条\n3. 只输出一个 JSON 数组，格式：[{\"time\": \"07:35\", \"text\": \"消息内容\"}, ...]\n4. 不要输出 JSON 以外的任何文字\n时间点：{time_list}",
