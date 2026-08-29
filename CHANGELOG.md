@@ -44,3 +44,13 @@
   `persist_agent_history` 同一机制）在会话当前对话的 history 末尾追加一条
   assistant 消息；会话尚无对话 / 无 conversation_manager（旧版）时静默跳过。
 - 新配置项 `record_to_history`（默认 `true`）：关闭则不写入会话历史。
+
+## v1.0.4（2026-08-28）
+
+### 🐛 修复：门禁误拦 daily_digest 日报的定时推送
+
+- **问题**：`allow_senders` 默认为空时，门禁只放行本插件；daily_digest 每天 08:00 的
+  定时推送在用户未活跃时被判定为「非白名单主动消息」而丢弃（用户早上收不到日报）。
+- **修复**：`allow_senders` 为空（默认）时，白名单**默认包含 `daily_digest`**（日报），
+  用户自定义非空白名单则完全覆盖默认值；配置面板默认值同步为 `daily_digest`。
+- 如需彻底拦截日报，把 `allow_senders` 改成其它非空值即可。
