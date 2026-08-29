@@ -1,6 +1,25 @@
 name: proactive_guard
-author: SeaSmall
+display_name: 主动消息门禁 + 每日人格消息
 desc: 主动消息门禁 + 每日定时人格消息：阻止非本插件的 AI 主动发言；每天后台生成 5-10 条随机时间点的人格消息，到点自动发送
 short_desc: 主动消息门禁 + 每日定时人格消息
 version: 1.0.4
+author: SeaSmall
 repo: https://github.com/SeaSmall/astrbot-plugin-proactive-guard
+license: MIT
+astrbot_version: ">=4.16.0"
+support_platforms:
+  - aiocqhttp
+  - qq_official
+  - telegram
+  - wecom
+  - lark
+  - dingtalk
+  - discord
+  - satori
+social_link: https://github.com/SeaSmall
+tags:
+  - guard
+  - proactive
+  - persona
+  - schedule
+  - cron
