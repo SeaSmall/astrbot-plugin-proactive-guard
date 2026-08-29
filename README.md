@@ -50,7 +50,7 @@
 | `block_proactive` | bool | `true` | 门禁开关：拦截非本插件的 AI 主动发言 |
 | `strict_mode` | bool | `false` | 严格模式：只放行本插件，连"用户最近活跃会话"也拦截 |
 | `active_window_minutes` | int | `30` | 活跃窗口（分钟）：用户此窗口内发过消息的会话放行（视为正常对话） |
-| `allow_senders` | text | 空 | 主动发送白名单：插件模块名关键词，每行一个（如 `daily_digest`） |
+| `allow_senders` | text | `daily_digest` | 主动发送白名单：插件模块名关键词，每行一个（**默认放行 `daily_digest` 日报**，可增删；改其它非空值即完全覆盖默认） |
 | `pause_active_agent_jobs` | bool | `true` | 启用时自动暂停 AstrBot 内置主动型 Agent 任务（可恢复） |
 | `gen_time` | string | `0 6 * * *` | 每日计划生成时间（cron，默认每天 06:00）：确保「明天」计划已预生成；计划缺失时任意时刻自动补种（20 分钟节流） |
 | `timezone` | string | `Asia/Shanghai` | 定时任务时区（IANA 时区名）。**必须与部署机器实际时区一致**，否则 cron 会在错误时间触发（如默认 UTC 时 `0 6 * * *` 会按 UTC 6 点跑） |
