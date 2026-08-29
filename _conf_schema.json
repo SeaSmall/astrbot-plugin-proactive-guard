@@ -21,8 +21,8 @@
   },
   "allow_senders": {
     "type": "text",
-    "default": "",
-    "description": "主动发送白名单：允许主动发消息的插件模块名关键词，每行一个（如 daily_digest）。留空则只允许本插件"
+    "default": "daily_digest",
+    "description": "主动发送白名单：允许主动发消息的插件模块名关键词，每行一个（默认放行 daily_digest 日报，可自行增删；留空=默认仅本插件+daily_digest）"
   },
   "pause_active_agent_jobs": {
     "type": "bool",
