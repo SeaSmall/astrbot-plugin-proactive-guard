@@ -153,9 +153,11 @@ class ProactiveGuardPlugin(Star):
 
     def _allowlist(self) -> list[str]:
         val = self.config.get("allow_senders")
-        if not val:
-            return []
-        return [s.strip() for s in str(val).splitlines() if s.strip()]
+        if val and str(val).strip():
+            return [s.strip() for s in str(val).splitlines() if s.strip()]
+        # 默认放行用户自己的 daily_digest（日报）插件，否则其定时推送会被门禁拦截；
+        # 如需完全拦截，在配置里把 allow_senders 设为空以外的自定义值即可（非空配置优先）
+        return ["daily_digest"]
 
     def _caller_module(self) -> str:
         # 按模块对象身份跳过本插件自身的帧（不受模块命名影响）
