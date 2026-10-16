@@ -538,12 +538,19 @@ class ProactiveGuardPlugin(Star):
                 f"[proactive_guard] 已读取记忆 {len(memory)} 字，用于生成（{target_date}）"
             )
 
-        if self._cfg_bool("subagent_enabled", True):
+        subagent_on = self._cfg_bool("subagent_enabled", True)
+        items = []
+        if subagent_on:
             items = await self._generate_with_subagents(
                 target_date, times, time_list, count, persona, memory_block
             )
-        else:
-            # 兼容路径：单次调用（v1.0.x 行为）
+        if not items:
+            # 兜底：单次调用（v1.0.x 行为）。子代理关闭、或规划代理失败/未产出要点时走这里，
+            # 保证「回退单次生成」这句日志名副其实（不再拿到空列表就直接报错）。
+            if subagent_on:
+                logger.warning(
+                    f"[proactive_guard] 子代理流水线未产出结果，回退单次生成（{target_date}）"
+                )
             prompt = (self.config.get("message_prompt") or DEFAULT_PROMPT).replace(
                 "{date}", target_date
             ).replace("{persona}", persona).replace(
@@ -551,8 +558,13 @@ class ProactiveGuardPlugin(Star):
             ).replace("{count}", str(count))
             if memory_block:
                 prompt = f"{prompt}\n{memory_block}"
-            text = await self._llm_chat(prompt)
-            items = self._parse_items(text, times)
+            try:
+                text = await self._llm_chat(prompt)
+                items = self._parse_items(text, times)
+            except Exception as e:
+                # 兜底也失败（例如 LLM 全挂）：只记日志，不把异常抛给调度器
+                logger.warning(f"[proactive_guard] 兜底单次生成失败（{target_date}）: {e}")
+                items = []
 
         if not items:
             logger.error(
@@ -563,7 +575,7 @@ class ProactiveGuardPlugin(Star):
         logger.info(
             f"[proactive_guard] 计划已生成（{target_date}）：{len(items)} 条消息 "
             f"@ {time_list}（后台静默，记忆 {'有' if memory else '无'}，"
-            f"子代理 {'开' if self._cfg_bool('subagent_enabled', True) else '关'}）"
+            f"子代理 {'开' if subagent_on else '关'}）"
         )
 
     # ------------------------------------------------------------------ #

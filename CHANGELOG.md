@@ -116,3 +116,35 @@
   `_parse_points` JSON/行解析/补齐/字段兼容、子代理全流程、审校条数相符/不符/异常
   三种走向、写手部分失败、规划失败、全失败不写 KV、单次路径带记忆、写历史→总结闭环、
   `_send_silent` 自动写历史、配置 schema 26 键完整性与描述/类型校验。
+
+## v1.1.1（2026-10-16）
+
+### 🐛 修复
+
+- **「回退单次生成」此前是假的**：`_generate_with_subagents()` 在规划失败或未产出要点时，
+  只打一条 `…回退单次生成` 的 warning 就 `return []`；而调用方拿到空列表后直接
+  `if not items:` 报「计划生成失败」并 return —— 回退**从未真正发生**，
+  README「每日计划（生成层）」里写的「规划失败 → 回退单次调用」也因此名不副实。
+  现在 `_generate_and_store()` 在 `if not items:` 时会**真的**再走一次单次调用
+  （子代理开启时先 warning 说明回退原因），并带 `try/except`：兜底也失败（例如 LLM 全挂）
+  时只记 warning、不把异常抛给调度器 —— 保持「`_generate_and_store()` 不抛异常」这一原有约定，
+  `_ensure_schedule()` 的 20 分钟重试节流与 `_on_gen_time()` 的错误处理因此不受影响。
+- `_parse_items()` / `_parse_points()` 对 `None` 输入会抛
+  `TypeError: expected string or bytes-like object, got 'NoneType'`；
+  `_review_drafts()` 未防空（审校代理返回空串时后续按行处理会崩）；`_clean_message()` 未做类型检查。
+  均已补显式类型判断。
+- 三段子代理提示词（`PLANNER_PROMPT` / `WRITER_PROMPT` / `REVIEWER_PROMPT`）原写作 `你是{persona}`，
+  而 `persona` 由 `_persona_text()` 拼出来本身就是「你是一个温柔、自然、不油腻的朋友型 AI 陪伴者…」，
+  渲染结果是 **「你是你是一个温柔…」**。三处改为 `{persona}`。
+  （`DEFAULT_PROMPT` 里的 `你是{persona}` 保持不变 —— 那条模板确实需要「你是」这个词。）
+
+### 🧪 测试
+
+- 新增回归脚本 `pgtest_full.py`：19 组、**107 项断言全部通过**。覆盖子代理全流程
+  （审校条数相符 / 不符 / 异常三种走向、写手部分失败、规划失败、全失败不写 KV、
+  单次路径带记忆、写历史→总结闭环、`_send_silent` 自动写历史、配置 schema 26 键完整性与描述/类型校验）。
+
+### 🔧 其它
+
+- metadata 版本 → 1.1.1。
+- 整合包 `astrbot-plugin-elaina-suite` v1.1.1 同步了本版的全部修复与这两项能力。
