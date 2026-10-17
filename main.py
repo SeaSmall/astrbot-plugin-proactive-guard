@@ -117,7 +117,8 @@ MEMORY_BLOCK_TEMPLATE = """
 MEMORY_KEY = "memory_store"
 
 # 记忆总结代理：把「旧摘要 + 新对话」滚动重写成一份聚焦的用户画像
-MEMORY_PROMPT = """你是一个记忆整理助手。请阅读下面的对话记录，提炼出关于这位用户的长期记忆要点。
+MEMORY_PROMPT = """你是一个记忆整理助手。你的任务是把对话里**关于这位用户这个人**的信息记下来，
+写成一份随时能查的个人档案。
 
 已有记忆（上一轮的总结，可能为空）：
 {old}
@@ -125,13 +126,44 @@ MEMORY_PROMPT = """你是一个记忆整理助手。请阅读下面的对话记�
 新的对话记录（从早到晚）：
 {raw}
 
-要求：
-1. 输出一份**更新后**的记忆，把旧记忆与新对话合并：保留旧记忆里仍然有效的部分，加入新出现的信息
-2. 只记「以后聊天用得上」的长期信息：称呼/昵称、身份与职业、正在做的事（项目、考试、行程）、
-   长期偏好与习惯（口味、作息、喜欢的表达方式）、情绪状态、重要的人际关系、明确提过的约定
-3. **不要记**流水账（「用户问了一个问题」「AI 回答了」这类）、不要记一次性的琐事、不要编造没出现过的信息
-4. 用第三人称写「用户…」，短句分条，每行一条，最多 {max_chars} 字
-5. 只输出记忆正文，不要输出标题、不要解释你做了什么"""
+要记什么（这是重点）：
+1. **发生过的事**：用户做过什么、遇到什么、去了哪、事情进展到哪一步
+2. **爱好与偏好**：喜欢/讨厌什么、口味、习惯、作息、喜欢的表达方式与称呼
+3. **正在做的事**：项目、学业、考试、工作、行程、长期目标，以及各自的进度
+4. **人际关系**：家人、朋友、同学、同事，用户怎么称呼他们、关系如何、发生过什么
+5. **情绪与状态**：最近的心情、身体状态、压力来源
+6. **明确约定**：用户和你说好要做的事、提过的计划
+
+不要记什么：
+- **不要写任何关于你自己（助手）的描述**：你的自称、口头禅、语气、性格、你做过什么、你承诺过什么。
+  你的行为风格由人格设定负责，写进记忆只会和人格设定重复、互相打架
+- 不要记「用户问了你一个问题」「你回答了」这类流水账
+- 不要把「用户这一次让你做什么」当成长期事实（一次性指令不是档案）
+- 不要记一次性琐事；有日期的事可以记但要带日期，超过 7 天的旧安排不再保留
+- 不要编造对话里没出现过的信息
+
+写法：
+- 第三人称，主语是「用户…」，短句分条，每行一条
+- **同一件事只写一次**；旧记忆与新对话重复的合并成一条，不要两处都留
+- 新旧信息冲突时以新的为准
+- 整份档案不超过 {max_chars} 字；超了先删最不重要、最可能过期的条目
+- 只输出记忆正文，不要标题、不要编号、不要解释你做了什么"""
+
+MEMORY_MERGE_PROMPT = """下面是同一个用户在不同会话里留下的记忆摘要，内容有重复，也可能互相矛盾。
+请把它们合并成**一份**去重后的个人档案。
+
+{items}
+
+合并要求：
+1. 只保留关于**用户这个人**的信息：发生过的事、爱好与偏好、正在做的事、人际关系、情绪状态、明确约定
+2. **删掉所有关于助手（你）自己的描述**：自称、语气、性格、做过什么、承诺过什么——这些由人格设定负责
+3. 同一件事只留一条；不同会话说法冲突时，保留更新、更具体的那条
+4. 有日期的安排保留日期，超过 7 天的旧安排删掉
+5. 第三人称「用户…」，短句分条，每行一条，不超过 {max_chars} 字
+6. 只输出记忆正文，不要标题、不要解释"""
+
+# 记忆里出现这些开头的行 = 在描述助手自己，注入前直接丢掉（兜底，防止模型不听话）
+_MEMORY_SELF_SUBJECTS = ("助手", "ai", "你", "机器人", "bot", "assistant", "模型")
 
 
 def _loose_llm_text(text, for_json: bool = False) -> str:
@@ -701,14 +733,32 @@ class ProactiveGuardPlugin(Star):
                     logger.warning(f"[proactive_guard] 总结会话记忆失败（{target}）: {e}")
             if not items:
                 return ""
+            # 多会话 -> 合并成一份去重档案。原来三分段并列，同一件事（熬夜、不吃早饭）
+            # 会被写三遍，注入时既费 token 又像复读。
+            merged = ""
+            if len(items) > 1:
+                try:
+                    packed = "\n\n".join(
+                        f"【会话 {i + 1}】\n{str(it.get('summary', '')).strip()}"
+                        for i, it in enumerate(items.values())
+                    )
+                    merged = await self._llm_chat(
+                        MEMORY_MERGE_PROMPT.format(items=packed, max_chars=max_chars)
+                    )
+                    merged = self._filter_memory_lines(merged)[:max_chars]
+                except Exception as e:
+                    logger.warning(f"[proactive_guard] 记忆合并失败，沿用分会话记忆: {e}")
+                    merged = ""
             store = {
                 "updated": datetime.now().strftime("%Y-%m-%d %H:%M"),
                 "items": list(items.values()),
+                "merged": merged,
             }
             await self.put_kv_data(MEMORY_KEY, store)
             logger.info(
                 f"[proactive_guard] 记忆已更新：{len(items)} 个会话"
                 f"（{', '.join(str(it.get('umo', '')) for it in items.values())}）"
+                f"，合并档案 {'已生成' if merged else '未生成'}"
             )
             return self._memory_text(store)
         except Exception as e:
@@ -725,17 +775,56 @@ class ProactiveGuardPlugin(Star):
         return {"items": []}
 
     @staticmethod
-    def _memory_text(store: dict) -> str:
-        """把记忆库渲染成注入提示词的一段文本。"""
-        items = [it for it in (store or {}).get("items", []) if it.get("summary")]
+    def _filter_memory_lines(text: str) -> str:
+        """丢掉「在描述助手自己」的条目，并按内容去重。
+
+        兜底层：即使提示词写明不要写 AI 自我介绍，模型仍会加上「助手自称魔女」
+        「助手会提醒喝水」这类行。这些由人格设定负责，留在记忆里只会重复并挤占预算。
+        """
+        out: list[str] = []
+        seen: set[str] = set()
+        for raw in str(text or "").splitlines():
+            line = raw.strip().lstrip("-*•·　").strip()
+            if not line:
+                continue
+            head = line[:10].lower()
+            if head.startswith(_MEMORY_SELF_SUBJECTS) or "助手" in head:
+                continue
+            key = re.sub(r"[\s，。；、,.：:!！?？~～]+", "", line)
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append(line)
+        return "\n".join(out)
+
+    def _memory_text(self, store: dict) -> str:
+        """把记忆库渲染成注入提示词的一段文本。
+
+        优先用合并后的单一档案（merged）；没有（单会话 / 合并失败）才回退分会话拼装。
+        两种情况都过 _filter_memory_lines。
+        """
+        store = store or {}
+        merged = self._filter_memory_lines(str(store.get("merged") or ""))
+        if merged:
+            return merged
+        items = [it for it in store.get("items", []) if it and it.get("summary")]
         if not items:
             return ""
         if len(items) == 1:
-            return str(items[0]["summary"]).strip()
+            return self._filter_memory_lines(str(items[0]["summary"]).strip())
+        # 跨会话拼装：同名事实只留第一条（按「去掉标点后的正文」判重，
+        # 不能用「【umo】+正文」判重，否则前缀不同会让重复行全部留下）
         lines: list[str] = []
+        seen: set[str] = set()
         for it in items:
-            umo = str(it.get("umo", ""))
-            lines.append(f"【{umo}】{str(it['summary']).strip()}")
+            body = self._filter_memory_lines(str(it["summary"]).strip())
+            if not body:
+                continue
+            key = re.sub(r"[\s，。；、,.：:!！?？~～]+", "", body)
+            if key in seen:
+                continue
+            seen.add(key)
+            lines.append(f"【{it.get('umo', '')}】{body}")
         return "\n".join(lines)
 
     async def _collect_memory(self) -> str:
@@ -1311,20 +1400,30 @@ class ProactiveGuardPlugin(Star):
         yield event.plain_result("⏳ 正在后台重建计划…")
         asyncio.create_task(self._rebuild_plans())
 
-    @filter.command("记忆")
     async def memory_command(self, event: AstrMessageEvent):
-        """查看当前记忆库内容"""
+        """查看当前记忆库内容。
+
+        重点是展示「真正注入给 AI 的那份档案」（merged，已剔除 AI 自述 + 去重），
+        分会话明细放后面折叠显示，方便核对来源。
+        """
         store = await self._load_memory_store()
         items = [it for it in store.get("items", []) if it]
         lines: list[str] = ["🧠 记忆库"]
         if not items:
             lines.append("（还没有记忆。到 memory_cron 时间会自动总结，或现在用 /刷新记忆 立刻生成）")
         else:
-            lines.append(f"最后更新：{store.get('updated', '未知')}")
-            for it in items:
+            lines.append(f"最后更新：{store.get('updated', '未知')}　会话数：{len(items)}")
+            archive = self._memory_text(store)
+            lines.append("")
+            lines.append("—— 注入给 AI 的档案 ——")
+            lines.append(archive or "（空：记忆被过滤后没有剩下可用内容）")
+            if len(items) > 1:
                 lines.append("")
-                lines.append(f"【{it.get('umo', '')}】{it.get('updated', '')}")
-                lines.append(str(it.get("summary", "")).strip())
+                lines.append("—— 分会话明细 ——")
+                for it in items:
+                    body = str(it.get("summary", "")).strip()
+                    lines.append(f"【{it.get('umo', '')}】{it.get('updated', '')}")
+                    lines.append(body[:400] + ("…" if len(body) > 400 else ""))
         if not self._cfg_bool("memory_enabled", True):
             lines.append("")
             lines.append("⚠️ 记忆功能当前已关闭（memory_enabled = false）")
