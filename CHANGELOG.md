@@ -239,3 +239,35 @@ AstrBot 工作区里的 `user_profile.md`（形如 `<data>/workspaces/<会话>/u
 ### 🔧 其它
 
 - `metadata.yaml` 版本 → 1.1.4；整合包 `astrbot-plugin-elaina-suite` v1.1.4 同步本版修复。
+
+## v1.1.5（2026-10-20）
+
+### 🐛 修复：计划用旧记忆生成，第二天还在提醒已经做完的事
+
+真机症状：用户笔记里明明写着「万事达卡已领（不要再提醒）」，第二天白天的主动消息还在提醒去领卡。
+
+三层根因：
+
+**① 计划是前一天预生成的。** 计划以「明天」为目标日期提前生成，用的是**生成那一刻**的记忆快照；记忆之后（03:00 定时、手动刷新、生成前冷却刷新）又变了，计划里的提醒却不会跟着变。
+
+**② 派发阶段完全没有复核。** `_dispatch_due` 到点就发，只比对日期与时间点，不看内容是否已经被现实推翻。
+
+**③ 生成与派发之间没有任何版本信息。** 计划里不记录「这份计划是基于哪一版记忆写的」，所以就算想判断也判断不了。
+
+四处改动：
+
+- **计划记录记忆水位**：`_generate_and_store` 写计划时多存一个 `memory_updated` 字段（沿用 `memory_store["updated"]`），把「这份计划基于哪一版记忆」记进计划；`_dispatch_due` 派发前比对 `plan["memory_updated"]` 与当前记忆水位（新增 `_memory_updated()`），不一致即判定记忆在生成后更新过（日志记 `memory_changed`），收尾时同步更新计划里的水位。
+- **发送前事实校验**：新增模块级 `FACT_CHECK_PROMPT` + `_fact_check_message()`。每条到点消息发送前，用**发送时刻的最新记忆**过一遍：与记忆冲突且能改写 → 发改写后的文本；冲突且改不出来（返回空字符串）→ **丢弃这一条**并记日志；不冲突或校验本身失败（LLM 异常/超时）→ 按原文发送，**绝不因为校验失败而丢消息**。受 `dispatch_fact_check`（默认开）控制。
+- **今日残留重建**：新增 `_regenerate_today_if_stale()`。生成时点先刷新记忆，再 `_ensure_schedule`（「昨日预生成计划提升为今日计划」发生在这一步），最后若发现今日计划基于旧记忆，就按最新记忆重写**今天还没到点**的那些条目——`_generate_and_store` 新增 `times` 参数传入**原时间点**，**时间点保持原样、只重写内容**；已发/已过点的不动。受 `dispatch_regenerate_on_memory_change`（默认开）控制。
+- **生成时点前移 + 强制刷新**：`gen_time` 默认从 `0 6 * * *` 改为 `20 3 * * *`（03:20），让「生成计划」排在 03:00 的记忆刷新之后；新增 `memory_refresh_before_gen`（默认开），生成前无条件刷新一次记忆，不等 30 分钟冷却。
+
+> ⚠️ `_on_gen_time` 的顺序不能反，必须是 **refresh_memory → `_ensure_schedule(force=False)` → `_regenerate_today_if_stale`**：跨天提升发生在 `_ensure_schedule` 内，若把 stale 检查提前，`daily_plan` 里还是昨天那份，检查会永远命中「昨天」，今日计划就白重建了。
+
+### ✅ 测试
+
+- `_scratch/pgtest_full.py` 19 组 118 项断言全过（schema 键数随新增配置更新为 34）。
+- 新增 `_scratch/pgtest_plan_memory.py`（对应整合包测试第 [22] 组）：水位写入、冲突改写、冲突丢弃、不冲突原文发送、LLM 异常仍原文发送、重建今日残留且时间点不变、`_on_gen_time` 调用顺序（refresh→ensure→regen），28 项断言全过。
+
+### 🔧 其它
+
+- `metadata.yaml` 版本 → 1.1.5；整合包 `astrbot-plugin-elaina-suite` 同步本版修复。
